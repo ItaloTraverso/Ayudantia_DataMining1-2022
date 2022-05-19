@@ -1,0 +1,397 @@
+---
+title: "Pauta Proyecto 1"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Este es un ejemplo de lo que se esperaba que realizaran en el proyecto 1 logrando lo pedido en el enunciado. 
+
+Ejemplo mediante RMarkdown, que permite que sea más amigable para presentar el reporte de lo que estén analizando, o en este caso para la entrega de un proyecto
+
+(También pueden instalar la librería de GitHub, lo que permite cargar un template diseñado para presentar el reporte en dicha plataforma)
+
+## Importar Librerías y Datos
+
+```{r librarias, warning=FALSE, echo=FALSE}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(GGally)
+library(corrplot)
+library(dbscan)
+library(corrr)
+
+beats.rds <- "D:\\Users\\Italo\\Documents\\Italo Felipe\\UAI\\Semestre 1-2022\\Mineria de Datos\\Proyecto\\beats.rds"
+data <- readRDS(beats.rds)
+```
+
+## Revisar Dataset 
+
+```{r dataset}
+
+head(data)  # Revisamos las primeras filas del dataset
+colnames(data) # Revisamos las columnas que lo componen
+glimpse(data) # Revisamos la estructura de dato de las columnas
+summary(data) # Resumen de datos
+
+```
+
+## Limpieza de Datos
+
+### Existencia NA's
+
+```{r limpieza_datos1}
+
+colSums(is.na(data))
+sum(is.na(data))
+
+```
+
+Antes de eliminar los NA's (si se encuentran), se verá si estos influyen o no en el análisis según las columnas que se decida utilizar
+
+Se ve que existen NA's en las columnas de album_release_year(447) y track_preview_url(174714), como no son importantes para el análisis no es necesario borrar estos datos
+
+### Existencia de Duplicados
+
+Revisamos si existen canciones duplicadas, para esto revisamos que el nombre de la canción y el nombre del artista coincidan.
+
+```{r limpieza_datos2}
+
+data0 <- data[!duplicated(data[c("artist_name","track_name")]),]
+
+nrow(data)
+nrow(data0)
+filas_borradas <- nrow(data) - nrow(data0)
+filas_borradas
+
+#Borramos el dataframe inicial por un tema de uso de memoria
+rm(data)
+```
+
+Como se puede ver nuestro dataset se vio disminuido en 256804 canciones que tenían el mismo nombre de canción y artista
+
+#### Transformamos el tiempo a minutos, y cambiamos el tipo de dato para key y mode
+
+```{r limpieza_datos3}
+
+data0 <- data0 %>% mutate(duration_min = duration_ms/60000) #Pasamos a minutos la duración
+data0$key <- as.numeric(data0$key)
+data0$mode <- as.numeric(data0$mode)
+```
+
+### Separamos variables numéricas y de carácter relevantes
+
+```{r limpieza_datos4}
+num <- c("danceability","energy","key","loudness","mode","speechiness","acousticness","instrumentalness",
+         "liveness","valence","tempo")
+num_data <- data0 %>% dplyr::select(all_of(num))
+
+#Se incluye aquí disc_number y duration_ms, ya que son características de la canción que no son relevantes para el análisis de clusters
+chr <- c("track_name","artist_name","album_name","disc_number","duration_ms")
+chr_data <- data0 %>% select(all_of(chr))
+
+#Escalamos las variables numéricas
+num_esc <- scale(num_data)
+```
+
+### Revisamos correlación entre las variables
+
+```{r limpieza_datos5}
+
+correlacion <- round(cor(num_esc), 2)
+correlacion[upper.tri(correlacion)] <- 0
+
+vars_pos <- correlacion[1 > correlacion & correlacion > 0.5] #Podemos ver que los valores más altos de correlación son 0.85 y 0.6 (en el plot se podrá identificar cuáles son las variables)
+
+corrplot(correlacion, method="number", type="lower", number.font = 0.5, tl.cex = 1) 
+
+num_esc <- num_esc %>% as.data.frame()
+
+vars_final <- c("danceability","energy","loudness","valence")
+num_esc <- num_esc %>% select(all_of(vars_final)) %>% as.data.frame()
+```
+
+Al ver el corrplot podemos ver que las variables con correlación más alta son energy-loudness y danceability-valence, por lo que tomaremos estas 4 variables para nuestro posterior análisis 
+
+### Para finalizar vamos a generar un sample representativo de nuestra población 
+
+```{r limpieza_datos6}
+set.seed(123)
+
+#Primero revisamos el summary de las variables con las que vamos a trabajar
+summary(num_esc)
+
+#Luego utilizamos la función sample_frac de dplyr para generar un muestreo aleatorio del 10% de la población
+data_sample <- sample_frac(num_esc, 0.1)
+
+#Finalmente revisamos el summary de nuestra muestra y comparamos con los valores de la población total
+summary(data_sample)
+
+data1 <- data_sample
+```
+Al comparar los valores podemos ver que si bien hay algunos de los estadísticos que cambian, las variaciones son mínimas por lo que podemos considerar que nuestra muestra es una buena representación de la población
+
+Una vez que ya hemos logrado limpiar nuestros datos y generar el dataframe final, seguimos con el análisis de clustering
+
+## Modelo 1: K-Means
+
+Primero probamos una configuración al azar de K-Means para ver que se obtiene con K = 15
+
+```{r kmeans1}
+set.seed(123)
+df1 <- data1
+
+modelo_kmeans1 <- kmeans(df1, centers = 15)
+
+# Se crea la variable cluster en la tabla df1
+df1$cluster <- modelo_kmeans1$cluster %>% as.factor()
+
+# Se grafican los clusters formados
+
+ggplot(data = df1, aes(x = loudness,y = energy, color = cluster)) +
+  geom_point(size = 1) +
+  labs(title = "Kmeans con K = 15") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+ggplot(data = df1, aes(x = danceability,y = valence, color = cluster)) +
+  geom_point(size = 1) +
+  labs(title = "Kmeans con K = 15") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+ggplot(data = df1, aes(x = danceability,y = energy, color = cluster)) +
+  geom_point(size = 1) +
+  labs(title = "Kmeans con K = 15") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+Podemos ver que los clusters encontrados no quedan muy marcados con un K = 15, por lo que utilizaremos el Método del Codo para ver con que valores de K se podrían obtener mejores resultados
+
+## Probamos el Método del Codo
+
+```{r m_codo1}
+set.seed(123)
+
+SSinterior <- numeric(15)
+
+for(k in 1:15){
+  modelo <- kmeans(data1, centers = k)
+  SSinterior[k] <- modelo$tot.withinss
+}
+
+SSinterior
+
+plot(SSinterior)
+
+ggplot() + geom_point(aes(x = 1:15, y = SSinterior), color = 'blue') + 
+  geom_line(aes(x = 1:15, y = SSinterior), color = 'blue') + 
+  ggtitle("Metodo del Codo") + 
+  xlab('Cantidad de Centroides k') + 
+  ylab('WCSS')
+```
+Al observar el grafico resultante del Método del Codo podemos observar que valores entre 4-6 podrían ser los adecuados para este análisis de K-Means
+
+También podemos verificar estos valores a través del coeficiente de silueta, pero por uso de memoria este análisis no se llevará acabo
+
+### Probamos K-Means con K = 6
+
+```{r kmeans2}
+set.seed(123)
+
+df2 <- data1
+
+modelo_kmeans2 <- kmeans(df2, centers = 6)
+
+# Se crea la variable cluster en la tabla df2
+df2$cluster <- modelo_kmeans2$cluster %>% as.factor()
+
+# Se grafican los clusters formados
+
+ggplot(data = df2, aes(x = loudness,y = energy, color = cluster)) +
+  geom_point(size = 1) +
+  labs(title = "Kmeans con K = 6") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+ggplot(data = df2, aes(x = danceability,y = valence, color = cluster)) +
+  geom_point(size = 1) +
+  labs(title = "Kmeans con K = 6") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+ggplot(data = df2, aes(x = danceability,y = energy, color = cluster)) +
+  geom_point(size = 1) +
+  labs(title = "Kmeans con K = 6") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+```
+
+### Probamos K-Means con K = 5
+
+```{r kmeans3}
+set.seed(123)
+
+df3 <- data1
+
+modelo_kmeans3 <- kmeans(df3, centers = 5)
+
+# Se crea la variable cluster en la tabla df3
+df3$cluster <- modelo_kmeans3$cluster %>% as.factor()
+
+# Se grafican los clusters formados para las dos combinaciones de variables que encontramos antes
+
+ggplot(data = df3, aes(x = loudness,y = energy, color = cluster)) +
+  geom_point(size = 1.5) +
+  labs(title = "Kmeans con K = 5") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+ggplot(data = df3, aes(x = danceability,y = valence, color = cluster)) +
+  geom_point(size = 1.5) +
+  labs(title = "Kmeans con K = 5") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+ggplot(data = df3, aes(x = danceability,y = energy, color = cluster)) +
+  geom_point(size = 1) +
+  labs(title = "Kmeans con K = 5") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+### Probamos K-Means con K = 4
+
+```{r kmeans4}
+set.seed(123)
+
+df4 <- data1
+
+modelo_kmeans4 <- kmeans(df4, centers = 4)
+
+# Se crea la variable cluster en la tabla df4
+df4$cluster <- modelo_kmeans4$cluster %>% as.factor()
+
+# Se grafican los clusters formados
+
+ggplot(data = df4, aes(x = loudness,y = energy, color = cluster)) +
+  geom_point(size = 1) +
+  labs(title = "Kmeans con K = 4") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+ggplot(data = df4, aes(x = danceability,y = valence, color = cluster)) +
+  geom_point(size = 1) +
+  labs(title = "Kmeans con K = 4") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+ggplot(data = df4, aes(x = danceability,y = energy, color = cluster)) +
+  geom_point(size = 1) +
+  labs(title = "Kmeans con K = 4") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+A partir de lo anterior el valor de K que entrega mejores clusters es K = 4. Si bien los grupos no quedan tan marcados unos de otros es el valor donde se logra distinguir en donde se "localiza" cada cluster
+
+## Modelo 2 (DBSCAN)
+
+### Probamos una configuración al azar de DBSCAN
+
+```{r dbscan1}
+library(dbscan)
+
+# Seleccionamos las dos variables con mayor correlación
+dt <- data1 %>% select(loudness, energy)
+dt1 <- dt
+
+# Como nuestro objetivo es lograr formar una playlist de 3 horas, tomaremos un minPts de 45 pensando que cada cluster formado será una playlist (se considera que cada canción dura 4min para seleccionar ese minPts)
+
+model = dbscan(dt1, eps = 0.2, minPts = 45)
+dt1$cluster <- model$cluster %>% as.factor()
+
+#Se grafican los clusters encontrados
+
+ggplot(dt1, aes(loudness, energy, color = cluster)) + 
+  geom_point(alpha = 0.3) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+```
+
+Buscamos el eps adecuado para los minPts elegidos
+
+```{r eps_minPts}
+#Buscamos el valor de eps para el K (minpts) seleccionado
+kNNdistplot(dt, k = 45)
+abline(h = 0.15, lty = 2)
+
+```
+
+### Probamos DBSCAN con el eps encontrado
+
+```{r dbscan2}
+library(dbscan)
+
+# Seleccionamos las dos variables con mayor correlación
+dt2 <- dt
+
+# Como nuestro objetivo es lograr formar una playlist de 3 horas, tomaremos un minPts de 45 pensando que cada cluster formado sera una playlist (se considera que cada cancion dura 4min para seleccionar ese minPts)
+
+model2 = dbscan(dt2, eps = 0.15, minPts = 45)
+dt2$cluster <- model2$cluster %>% as.factor()
+
+#Se grafican los clusters encontrados
+
+ggplot(dt2, aes(loudness, energy, color = cluster)) + 
+  geom_point(alpha = 0.3) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+
+```
+
+Como los resultados obtenidos con las dos variables que se escogen no entregan buenos resultados, probaremos con la otra combinación de variables que encontramos antes
+
+### Probamos DBSCAN utilizando otra dupla de variables y modificando minPts
+
+```{r dbscan3}
+# Seleccionamos las dos variables con segunda mayor correlación
+# También modificamos la cantidad de minPts a 30 para ver si aumenta la cantidad de clusters encontrados
+
+DT <- data1 %>% select(danceability, valence)
+DT1 <- DT
+
+#Buscamos el valor de eps para el K (minpts) seleccionado
+
+kNNdistplot(DT, k = 30)
+abline(h = 0.13, lty = 2)
+
+model3 = dbscan(DT1, eps = 0.13, minPts = 30)
+DT1$cluster <- model3$cluster %>% as.factor()
+
+#Se grafican los clusters encontrados
+
+ggplot(DT1, aes(danceability, valence, color = cluster)) + 
+  geom_point(alpha = 0.3) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+```
+Como podemos observar al utilizar el modelo DBSCAN, existe un cluster que absorbe la mayor cantidad de datos por lo que no se logran forman distintos clusters que permitieran generar distintas playlist a partir de estos. Además podemos ver que en el tercer modelo DBSCAN se logran formar dos cluster más, sin embargo estos son muy pocos datos como para considerarlos un cluster significativo.
+
+(Para la sección de modelos se esperaba que iteraran al menos 3 veces probando distintas configuraciones para estos, y que a partir de ellas pudieran decidir cual era el mejor valor para el/los hiper parámetro/s)
+
+## Justificación Selección de Modelo
+
+A partir de lo anterior, podemos ver que el modelo que permite agrupar de mejor manera los datos con los que estamos trabajando es el modelo de K-Means. 
+
+Por lo cual el valor de K que se adecua para la creación de playlist es cuando K = 4 dado que permite formar clusters mejor definidos que los otros valores de K que fueron probados.
+
+Sin embargo como se mencionó antes estos clusters no quedan tan marcados por lo que al momento de realizar la playlist se realizara otra interacción de K-Means dentro del cluster donde se encuentre la canción objetivo, con el fin de lograr que el playlist sea conformado con canciones que sean parecidas. 
